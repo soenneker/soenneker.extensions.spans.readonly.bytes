@@ -32,6 +32,47 @@ public static class ReadOnlySpanByteExtension
     [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool LooksBinary(this ReadOnlySpan<byte> utf8) => Classify(utf8) == ContentKind.Binary;
 
+
+    [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool ContainsNonAscii(this ReadOnlySpan<byte> utf8)
+    {
+        for (var i = 0; i < utf8.Length; i++)
+        {
+            if (utf8[i] >= 0x80)
+                return true;
+        }
+
+        return false;
+    }
+
+    [Pure]
+    public static bool Utf8AsciiEqualsIgnoreCase(this ReadOnlySpan<byte> leftAscii, ReadOnlySpan<byte> rightAscii)
+    {
+        if (leftAscii.Length != rightAscii.Length)
+            return false;
+
+        for (var i = 0; i < leftAscii.Length; i++)
+        {
+            byte a = leftAscii[i];
+            byte b = rightAscii[i];
+
+            if (a == b)
+                continue;
+
+            // fold A-Z to a-z
+            if ((uint)(a - (byte)'A') <= 'Z' - 'A')
+                a = (byte)(a + 32);
+
+            if ((uint)(b - (byte)'A') <= 'Z' - 'A')
+                b = (byte)(b + 32);
+
+            if (a != b)
+                return false;
+        }
+
+        return true;
+    }
+
     [Pure, MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static ContentKind Classify(this ReadOnlySpan<byte> utf8)
     {
