@@ -14,11 +14,13 @@ public static class ReadOnlySpanByteExtension
 {
     private static readonly SearchValues<byte> _ws = SearchValues.Create(" \t\r\n"u8);
 
+    private const int _probeLimit = 512;
+
     /// <summary>Bytes → SHA-256 hex (uppercase by default)</summary>
     [Pure, MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static string ToSha256Hex(this ReadOnlySpan<byte> data, bool upperCase = true)
     {
-        Span<byte> hash = stackalloc byte[32]; // SHA-256 output (uninitialized is fine)
+        Span<byte> hash = stackalloc byte[32];
         SHA256.TryHashData(data, hash, out _);
         return upperCase ? Convert.ToHexString(hash) : Convert.ToHexStringLower(hash);
     }
@@ -32,18 +34,9 @@ public static class ReadOnlySpanByteExtension
     [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool LooksBinary(this ReadOnlySpan<byte> utf8) => Classify(utf8) == ContentKind.Binary;
 
-
     [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool ContainsNonAscii(this ReadOnlySpan<byte> utf8)
-    {
-        for (var i = 0; i < utf8.Length; i++)
-        {
-            if (utf8[i] >= 0x80)
-                return true;
-        }
-
-        return false;
-    }
+        => utf8.IndexOfAnyInRange((byte)0x80, (byte)0xFF) >= 0;
 
     [Pure]
     public static bool Utf8AsciiEqualsIgnoreCase(this ReadOnlySpan<byte> leftAscii, ReadOnlySpan<byte> rightAscii)
@@ -51,7 +44,7 @@ public static class ReadOnlySpanByteExtension
         if (leftAscii.Length != rightAscii.Length)
             return false;
 
-        for (var i = 0; i < leftAscii.Length; i++)
+        for (int i = 0; i < leftAscii.Length; i++)
         {
             byte a = leftAscii[i];
             byte b = rightAscii[i];
@@ -59,7 +52,6 @@ public static class ReadOnlySpanByteExtension
             if (a == b)
                 continue;
 
-            // fold A-Z to a-z
             if ((uint)(a - (byte)'A') <= 'Z' - 'A')
                 a = (byte)(a + 32);
 
@@ -78,54 +70,46 @@ public static class ReadOnlySpanByteExtension
     {
         // Skip UTF-8 BOM
         if (utf8.Length >= 3 && utf8[0] == 0xEF && utf8[1] == 0xBB && utf8[2] == 0xBF)
-            utf8 = utf8[3..];
+            utf8 = utf8.Slice(3);
 
         if (utf8.IsEmpty)
             return ContentKind.Unknown;
 
-        // Quick binary heuristic (first 512 bytes)
-        int limit = utf8.Length < 512 ? utf8.Length : 512;
+        int limit = utf8.Length <= _probeLimit ? utf8.Length : _probeLimit;
         ReadOnlySpan<byte> head = utf8.Slice(0, limit);
 
-        // NUL is a strong binary signal; this is fast (vectorized internally)
+        // Strong binary signal
         if (head.IndexOf((byte)0) >= 0)
             return ContentKind.Binary;
 
         // Count C0 controls except \t \n \r
-        var controls = 0;
-
-        for (var i = 0; i < head.Length; i++)
+        int controls = 0;
+        for (int i = 0; i < head.Length; i++)
         {
             byte b = head[i];
             if (b < 0x20 && b != (byte)'\t' && b != (byte)'\n' && b != (byte)'\r')
                 controls++;
         }
 
-        if (controls > limit / 10) // >10% controls => likely binary
+        if (controls > (limit / 10))
             return ContentKind.Binary;
 
-        // Skip RFC 8259 JSON whitespace in one shot
-        int idx = utf8.IndexOfAnyExcept(_ws);
+        // Find first non-whitespace (bounded to probe window)
+        int idx = head.IndexOfAnyExcept(_ws);
         if (idx < 0)
-            return ContentKind.Unknown;
+            return utf8.Length == head.Length ? ContentKind.Unknown : ContentKind.Text;
 
-        byte c = utf8[idx];
+        byte c = head[idx];
 
-        switch (c)
+        return c switch
         {
-            // JSON containers
-            case (byte)'{' or (byte)'[':
-            // JSON top-level primitives
-            case (byte)'"':
-            case (byte)'-':
-            case >= (byte)'0' and <= (byte)'9':
-            // true/false/null
-            case (byte)'t' or (byte)'f' or (byte)'n':
-                return ContentKind.Json;
-            case (byte)'<':
-                return ContentKind.XmlOrHtml;
-            default:
-                return ContentKind.Text;
-        }
+            (byte)'{' or (byte)'[' => ContentKind.Json,
+            (byte)'"' => ContentKind.Json,
+            (byte)'-' => ContentKind.Json,
+            >= (byte)'0' and <= (byte)'9' => ContentKind.Json,
+            (byte)'t' or (byte)'f' or (byte)'n' => ContentKind.Json,
+            (byte)'<' => ContentKind.XmlOrHtml,
+            _ => ContentKind.Text
+        };
     }
 }
