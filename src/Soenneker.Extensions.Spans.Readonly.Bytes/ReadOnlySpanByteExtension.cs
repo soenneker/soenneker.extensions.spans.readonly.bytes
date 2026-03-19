@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Buffers;
 using System.Diagnostics.Contracts;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -17,16 +16,14 @@ namespace Soenneker.Extensions.Spans.Readonly.Bytes;
 /// contexts.</remarks>
 public static class ReadOnlySpanByteExtension
 {
-    private static readonly SearchValues<byte> _ws = SearchValues.Create(" \t\r\n"u8);
-
     private const int _probeLimit = 512;
 
     // 32 bytes hash => 64 hex chars
     private const int _sha256Bytes = 32;
-    private const int _sha256HexChars = _sha256Bytes * 2;
+    private const int _sha256HexChars = 64;
 
-    private static ReadOnlySpan<char> _hexUpper => "0123456789ABCDEF";
-    private static ReadOnlySpan<char> _hexLower => "0123456789abcdef";
+    private const string _hexUpper = "0123456789ABCDEF";
+    private const string _hexLower = "0123456789abcdef";
 
     /// <summary>
     /// Computes the SHA-256 hash of the specified byte span and returns its hexadecimal representation.
@@ -43,13 +40,15 @@ public static class ReadOnlySpanByteExtension
     /// <returns>
     /// A 64-character hexadecimal string representing the SHA-256 hash of the input.
     /// </returns>
-    [Pure, MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ToSha256Hex(this ReadOnlySpan<byte> data, bool upperCase = true)
     {
         Span<char> chars = stackalloc char[_sha256HexChars];
-        TryWriteSha256Hex(data, chars, upperCase, out int written);
-        // written should always be 64 here
-        return new string(chars.Slice(0, written));
+
+        if (!TryWriteSha256Hex(data, chars, upperCase, out _))
+            throw new InvalidOperationException("Failed to compute SHA-256 hash.");
+
+        return new string(chars);
     }
 
     /// <summary>
@@ -74,12 +73,8 @@ public static class ReadOnlySpanByteExtension
     /// <see langword="true"/> if the hash was successfully written to <paramref name="destination"/>; 
     /// otherwise, <see langword="false"/> if the destination buffer was too small or hashing failed.
     /// </returns>
-    [Pure, MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public static bool TryWriteSha256Hex(
-        this ReadOnlySpan<byte> data,
-        Span<char> destination,
-        bool upperCase,
-        out int charsWritten)
+    [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryWriteSha256Hex(this ReadOnlySpan<byte> data, Span<char> destination, bool upperCase, out int charsWritten)
     {
         if ((uint)destination.Length < _sha256HexChars)
         {
@@ -100,8 +95,8 @@ public static class ReadOnlySpanByteExtension
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private static void EncodeHex(ReadOnlySpan<byte> bytes, Span<char> dest, bool upperCase)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EncodeHex(ReadOnlySpan<byte> bytes, Span<char> destination, bool upperCase)
     {
         ReadOnlySpan<char> hex = upperCase ? _hexUpper : _hexLower;
 
@@ -109,8 +104,8 @@ public static class ReadOnlySpanByteExtension
         for (int i = 0; i < bytes.Length; i++)
         {
             byte b = bytes[i];
-            dest[di++] = hex[b >> 4];
-            dest[di++] = hex[b & 0xF];
+            destination[di++] = hex[b >> 4];
+            destination[di++] = hex[b & 0x0F];
         }
     }
 
@@ -170,8 +165,7 @@ public static class ReadOnlySpanByteExtension
     /// <see langword="true"/> if at least one byte is greater than 0x7F; otherwise, <see langword="false"/>.
     /// </returns>
     [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool ContainsNonAscii(this ReadOnlySpan<byte> utf8)
-        => utf8.IndexOfAnyInRange((byte)0x80, (byte)0xFF) >= 0;
+    public static bool ContainsNonAscii(this ReadOnlySpan<byte> utf8) => utf8.IndexOfAnyInRange((byte)0x80, (byte)0xFF) >= 0;
 
     /// <summary>
     /// Performs a case-insensitive comparison of two ASCII byte spans.
@@ -187,14 +181,14 @@ public static class ReadOnlySpanByteExtension
     /// <see langword="true"/> if the spans are equal using ASCII case-insensitive comparison;
     /// otherwise, <see langword="false"/>.
     /// </returns>
-    [Pure, MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool Utf8AsciiEqualsIgnoreCase(this ReadOnlySpan<byte> leftAscii, ReadOnlySpan<byte> rightAscii)
     {
-        int len = leftAscii.Length;
-        if (len != rightAscii.Length)
+        int length = leftAscii.Length;
+        if (length != rightAscii.Length)
             return false;
 
-        for (int i = 0; i < len; i++)
+        for (int i = 0; i < length; i++)
         {
             byte a = leftAscii[i];
             byte b = rightAscii[i];
@@ -202,15 +196,9 @@ public static class ReadOnlySpanByteExtension
             if (a == b)
                 continue;
 
-            // Fold ASCII to lowercase via | 0x20, then validate it's a letter.
             byte af = (byte)(a | 0x20);
-            byte bf = (byte)(b | 0x20);
-
-            // If both are letters and equal after folding -> match; otherwise fail.
-            if ((uint)(af - (byte)'a') <= 'z' - 'a' && af == bf)
-                continue;
-
-            return false;
+            if (af != (byte)(b | 0x20) || (uint)(af - (byte)'a') > (byte)('z' - 'a'))
+                return false;
         }
 
         return true;
@@ -236,47 +224,54 @@ public static class ReadOnlySpanByteExtension
     /// <returns>
     /// A <see cref="ContentKind"/> value indicating the detected content category.
     /// </returns>
-    [Pure, MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ContentKind Classify(this ReadOnlySpan<byte> utf8)
     {
-        // Skip UTF-8 BOM
         if (utf8.Length >= 3 && utf8[0] == 0xEF && utf8[1] == 0xBB && utf8[2] == 0xBF)
-            utf8 = utf8.Slice(3);
+        {
+            utf8 = utf8[3..];
+        }
 
         if (utf8.IsEmpty)
             return ContentKind.Unknown;
 
         int limit = utf8.Length <= _probeLimit ? utf8.Length : _probeLimit;
-        ReadOnlySpan<byte> head = utf8.Slice(0, limit);
+        ReadOnlySpan<byte> head = utf8[..limit];
 
-        // Strong binary signal
-        if (head.IndexOf((byte)0) >= 0)
-            return ContentKind.Binary;
-
-        // Count C0 controls except \t \n \r, but bail as soon as it crosses threshold.
-        int cutoff = limit / 10 + 1; // strictly ">" 10% => fail; +1 lets us early-exit on crossing
+        int cutoff = limit / 10 + 1;
         int controls = 0;
+        byte firstNonWhitespace = 0;
+        bool foundFirstNonWhitespace = false;
 
         for (int i = 0; i < head.Length; i++)
         {
             byte b = head[i];
 
-            // C0 control range
-            if (b < 0x20 && b != (byte)'\t' && b != (byte)'\n' && b != (byte)'\r')
+            if (b == 0)
+                return ContentKind.Binary;
+
+            if (b < 0x20)
             {
-                if (++controls >= cutoff)
-                    return ContentKind.Binary;
+                if (b != (byte)'\t' && b != (byte)'\n' && b != (byte)'\r')
+                {
+                    if (++controls >= cutoff)
+                        return ContentKind.Binary;
+                }
+
+                continue;
+            }
+
+            if (!foundFirstNonWhitespace && b != (byte)' ')
+            {
+                firstNonWhitespace = b;
+                foundFirstNonWhitespace = true;
             }
         }
 
-        // Find first non-whitespace (bounded to probe window)
-        int idx = head.IndexOfAnyExcept(_ws);
-        if (idx < 0)
+        if (!foundFirstNonWhitespace)
             return utf8.Length == head.Length ? ContentKind.Unknown : ContentKind.Text;
 
-        byte c = head[idx];
-
-        return c switch
+        return firstNonWhitespace switch
         {
             (byte)'{' or (byte)'[' => ContentKind.Json,
             (byte)'"' => ContentKind.Json,
