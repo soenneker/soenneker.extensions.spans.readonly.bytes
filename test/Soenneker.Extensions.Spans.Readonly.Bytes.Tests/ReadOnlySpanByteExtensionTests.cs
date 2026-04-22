@@ -1,11 +1,10 @@
-﻿using Soenneker.Tests.Unit;
-using Xunit;
+using Soenneker.Tests.Unit;
 
 namespace Soenneker.Extensions.Spans.Readonly.Bytes.Tests;
 
 public sealed class ReadOnlySpanByteExtensionTests : UnitTest
 {
-    [Fact]
+    [Test]
     public void Default()
     {
 
