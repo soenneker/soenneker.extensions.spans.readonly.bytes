@@ -44,6 +44,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Soenneker.Enums.ContentKinds" Version="4.0.44" />
+        <PackageReference Include="Soenneker.Enums.ContentKinds" Version="4.0.45" />
     </ItemGroup>
 </Project>
