@@ -4,7 +4,7 @@
 [![](https://img.shields.io/github/actions/workflow/status/soenneker/soenneker.extensions.spans.readonly.bytes/codeql.yml?label=CodeQL&style=for-the-badge)](https://github.com/soenneker/soenneker.extensions.spans.readonly.bytes/actions/workflows/codeql.yml)
 
 # ![](https://user-images.githubusercontent.com/4441470/224455560-91ed3ee7-f510-4041-a8d2-3fc093025112.png) Soenneker.Extensions.Spans.Readonly.Bytes
-A collection of helpful ReadOnlySpan (byte) extension methods.
+Allocation-conscious SHA-256, ASCII comparison, and content-sniffing helpers for `ReadOnlySpan<byte>`.
 
 ## Installation
 
@@ -12,22 +12,43 @@ A collection of helpful ReadOnlySpan (byte) extension methods.
 dotnet add package Soenneker.Extensions.Spans.Readonly.Bytes
 ```
 
-## Quick start
+## SHA-256 as hexadecimal text
 
 ```csharp
 using Soenneker.Extensions.Spans.Readonly.Bytes;
 
-// Given an existing ReadOnlySpan<byte> named data:
-var result = data.ToSha256Hex();
+ReadOnlySpan<byte> data = "payload"u8;
+
+string upper = data.ToSha256Hex();
+string lower = data.ToSha256Hex(upperCase: false);
+
+Span<char> destination = stackalloc char[64];
+bool written = data.TryWriteSha256Hex(destination, upperCase: false, out int charsWritten);
 ```
 
-## Common operations
+`ToSha256Hex()` returns exactly 64 characters. `TryWriteSha256Hex()` avoids the result-string allocation, requires a destination of at least 64 characters, and reports `charsWritten = 0` without modifying the destination when it is too small.
 
-- `ToSha256Hex()` - Computes the SHA-256 hash of the specified byte span and returns its hexadecimal representation.
-- `TryWriteSha256Hex()` - Computes the SHA-256 hash of the specified byte span and writes its hexadecimal representation into a destination buffer. Returns `true` if the hash was successfully written to `destination`; otherwise, `false` if the destination buffer was too small or hashing failed. This method performs no managed heap allocations.
-- `LooksLikeJson()` - Determines whether the specified UTF-8 byte span appears to represent JSON content. This method performs a lightweight check and does not fully validate the JSON structure.
-- `LooksLikeXmlOrHtml()` - Determines whether the specified UTF-8 byte span appears to contain XML or HTML content.
-- `LooksBinary()` - Determines whether the specified UTF-8 byte span appears to contain binary (non-text) content.
-- `ContainsNonAscii()` - Determines whether the specified byte span contains any non-ASCII bytes.
-- `Utf8AsciiEqualsIgnoreCase()` - Performs a case-insensitive comparison of two ASCII byte spans. Returns `true` if the spans are equal using ASCII case-insensitive comparison; otherwise, `false`.
-- `Classify()` - Classifies the specified UTF-8 byte span into a high-level content category. Returns a `ContentKind` value indicating the detected content category.
+## Classify an unknown payload
+
+```csharp
+using Soenneker.Enums.ContentKinds;
+using Soenneker.Extensions.Spans.Readonly.Bytes;
+
+ReadOnlySpan<byte> payload = "  {\"id\": 42}"u8;
+
+ContentKind kind = payload.Classify();
+bool looksLikeJson = payload.LooksLikeJson();
+```
+
+Classification is deliberately a cheap sniff, not parsing or validation. It examines at most the first 512 bytes, skips a leading UTF-8 BOM, treats a null byte or a high density of control bytes as binary, and otherwise uses the first non-whitespace byte to choose JSON, XML/HTML, or text. JSON scalar prefixes such as a quote, digit, `-`, `t`, `f`, or `n` are recognized.
+
+Use a real JSON/XML parser before trusting or processing untrusted content. UTF-8 validity is not checked, and `XmlOrHtml` does not distinguish the two formats.
+
+## ASCII helpers
+
+```csharp
+bool equal = "CONTENT-TYPE"u8.Utf8AsciiEqualsIgnoreCase("content-type"u8);
+bool containsUtf8 = "café"u8.ContainsNonAscii();
+```
+
+`Utf8AsciiEqualsIgnoreCase()` compares ASCII letters without culture rules. It does not validate that either input is ASCII; non-letter bytes must match exactly. `ContainsNonAscii()` simply detects bytes from `0x80` through `0xFF` and does not validate UTF-8.
