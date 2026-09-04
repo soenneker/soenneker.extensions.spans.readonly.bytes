@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Diagnostics.Contracts;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
 using Soenneker.Enums.ContentKinds;
+using Soenneker.Hashing.Sha256;
 
 namespace Soenneker.Extensions.Spans.Readonly.Bytes;
 
@@ -16,6 +16,8 @@ namespace Soenneker.Extensions.Spans.Readonly.Bytes;
 /// contexts.</remarks>
 public static class ReadOnlySpanByteExtension
 {
+    private static readonly Sha256HashingUtil _sha256 = new();
+
     private const int _probeLimit = 512;
 
     // 32 bytes hash => 64 hex chars
@@ -84,7 +86,7 @@ public static class ReadOnlySpanByteExtension
 
         Span<byte> hash = stackalloc byte[_sha256Bytes];
 
-        if (!SHA256.TryHashData(data, hash, out int hashWritten) || hashWritten != _sha256Bytes)
+        if (!_sha256.TryHash(data, hash, out int hashWritten) || hashWritten != _sha256Bytes)
         {
             charsWritten = 0;
             return false;
