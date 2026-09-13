@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics.Contracts;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Soenneker.Enums.ContentKinds;
 using Soenneker.Hashing.Sha256;
 
@@ -24,8 +25,6 @@ public static class ReadOnlySpanByteExtension
     private const int _sha256Bytes = 32;
     private const int _sha256HexChars = 64;
 
-    private const string _hexUpper = "0123456789ABCDEF";
-    private const string _hexLower = "0123456789abcdef";
 
     /// <summary>
     /// Computes the SHA-256 hash of the specified byte span and returns its hexadecimal representation.
@@ -45,12 +44,11 @@ public static class ReadOnlySpanByteExtension
     [Pure, MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ToSha256Hex(this ReadOnlySpan<byte> data, bool upperCase = true)
     {
-        Span<char> chars = stackalloc char[_sha256HexChars];
-
-        if (!TryWriteSha256Hex(data, chars, upperCase, out _))
+        Span<byte> hash = stackalloc byte[_sha256Bytes];
+        if (!_sha256.TryHash(data, hash, out int written) || written != _sha256Bytes)
             throw new InvalidOperationException("Failed to compute SHA-256 hash.");
 
-        return new string(chars);
+        return upperCase ? Convert.ToHexString(hash) : Convert.ToHexStringLower(hash);
     }
 
     /// <summary>
@@ -100,15 +98,10 @@ public static class ReadOnlySpanByteExtension
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EncodeHex(ReadOnlySpan<byte> bytes, Span<char> destination, bool upperCase)
     {
-        ReadOnlySpan<char> hex = upperCase ? _hexUpper : _hexLower;
-
-        int di = 0;
-        for (int i = 0; i < bytes.Length; i++)
-        {
-            byte b = bytes[i];
-            destination[di++] = hex[b >> 4];
-            destination[di++] = hex[b & 0x0F];
-        }
+        if (upperCase)
+            Convert.TryToHexString(bytes, destination, out _);
+        else
+            Convert.TryToHexStringLower(bytes, destination, out _);
     }
 
     /// <summary>
@@ -190,6 +183,9 @@ public static class ReadOnlySpanByteExtension
         if (length != rightAscii.Length)
             return false;
 
+        if (length >= 8 && Ascii.IsValid(leftAscii) && Ascii.IsValid(rightAscii))
+            return Ascii.EqualsIgnoreCase(leftAscii, rightAscii);
+
         for (int i = 0; i < length; i++)
         {
             byte a = leftAscii[i];
@@ -240,6 +236,15 @@ public static class ReadOnlySpanByteExtension
         int limit = utf8.Length <= _probeLimit ? utf8.Length : _probeLimit;
         ReadOnlySpan<byte> head = utf8[..limit];
 
+        // Ordinary text without controls needs no byte-by-byte density scan.
+        if (head.IndexOfAnyInRange((byte)0, (byte)0x1f) < 0)
+        {
+            int first = head.IndexOfAnyExcept((byte)' ');
+            if (first < 0)
+                return utf8.Length == head.Length ? ContentKind.Unknown : ContentKind.Text;
+            return ClassifyFirstByte(head[first]);
+        }
+
         int cutoff = limit / 10 + 1;
         int controls = 0;
         byte firstNonWhitespace = 0;
@@ -273,6 +278,12 @@ public static class ReadOnlySpanByteExtension
         if (!foundFirstNonWhitespace)
             return utf8.Length == head.Length ? ContentKind.Unknown : ContentKind.Text;
 
+        return ClassifyFirstByte(firstNonWhitespace);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ContentKind ClassifyFirstByte(byte firstNonWhitespace)
+    {
         return firstNonWhitespace switch
         {
             (byte)'{' or (byte)'[' => ContentKind.Json,
