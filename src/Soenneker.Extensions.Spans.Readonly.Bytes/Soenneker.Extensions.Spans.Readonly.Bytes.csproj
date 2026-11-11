@@ -46,6 +46,6 @@
 
     <ItemGroup>
         <PackageReference Include="Soenneker.Enums.ContentKinds" Version="11.0.82" />
-        <PackageReference Include="Soenneker.Hashing.Sha256" Version="11.0.20" />
+        <PackageReference Include="Soenneker.Hashing.Sha256" Version="11.0.21" />
     </ItemGroup>
 </Project>
